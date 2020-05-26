@@ -1,7 +1,7 @@
 use flate2::bufread::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use needletail::parse_sequence_reader;
+use needletail::{parse_sequence_path, parse_sequence_reader};
 use snafu::Snafu;
 use std::collections::HashSet;
 use std::fs::File;
@@ -247,10 +247,10 @@ impl Fastx {
     /// assert_eq!(actual, expected)
     /// ```
     pub fn read_lengths(&self) -> Result<Vec<u32>, Invalid> {
-        let file_handle = self.open()?;
+        // let file_handle = self.open()?;
         let mut read_lengths: Vec<u32> = Vec::with_capacity(5000);
-        match parse_sequence_reader(
-            file_handle,
+        match parse_sequence_path(
+            &self.path,
             |_| {},
             |seq| {
                 read_lengths.push(seq.seq.len() as u32);
@@ -299,17 +299,21 @@ impl Fastx {
         mut reads_to_keep: HashSet<u32>,
         mut write_to: &mut T,
     ) -> Result<(), Invalid> {
-        let file_handle = self.open()?;
+        // let file_handle = self.open()?;
         let mut i: u32 = 0;
-        let _result = match parse_sequence_reader(
-            file_handle,
+        let _result = match parse_sequence_path(
+            &self.path,
             |_| {},
             |record| {
                 if reads_to_keep.contains(&i) {
                     if self.filetype == FileType::Fasta {
-                        record.write_fasta(&mut write_to, b"\n");
+                        record
+                            .write_fasta(&mut write_to, b"\n")
+                            .expect(format!("Failed to write record {}", &i).as_str());
                     } else {
-                        record.write_fastq(&mut write_to, b"\n");
+                        record
+                            .write_fastq(&mut write_to, b"\n")
+                            .expect(format!("Failed to write record {}", &i).as_str());
                     }
                     reads_to_keep.remove(&i);
                 }
