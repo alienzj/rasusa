@@ -30,6 +30,7 @@ rand_pcg = "0.2.1"
 log = "0.4"
 fern = { version = "0.5", features = ["colored"] }
 chrono = "0.4"
+needletail = "0.3.2"
 
 [dev-dependencies]
 assert_cmd = "0.10"

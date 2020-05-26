@@ -1,7 +1,7 @@
-use bio::io::{fasta, fastq};
 use flate2::bufread::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use needletail::parse_sequence_reader;
 use snafu::Snafu;
 use std::collections::HashSet;
 use std::fs::File;
@@ -248,17 +248,19 @@ impl Fastx {
     /// ```
     pub fn read_lengths(&self) -> Result<Vec<u32>, Invalid> {
         let file_handle = self.open()?;
-        let read_lengths = match self.filetype {
-            FileType::Fasta => fasta::Reader::new(file_handle)
-                .records()
-                .map(|record| record.unwrap().seq().len() as u32)
-                .collect(),
-            FileType::Fastq => fastq::Reader::new(file_handle)
-                .records()
-                .map(|record| record.unwrap().seq().len() as u32)
-                .collect(),
-        };
-        Ok(read_lengths)
+        let mut read_lengths: Vec<u32> = Vec::with_capacity(5000);
+        match parse_sequence_reader(
+            file_handle,
+            |_| {},
+            |seq| {
+                read_lengths.push(seq.seq.len() as u32);
+            },
+        ) {
+            Ok(_) => Ok(read_lengths),
+            Err(err) => Err(Invalid::OpenInputFile {
+                error: err.to_string(),
+            }),
+        }
     }
 
     /// Writes reads, with indices contained within `reads_to_keep`, to the specified handle
@@ -295,78 +297,39 @@ impl Fastx {
     pub fn filter_reads_into<T: ?Sized + Write>(
         &self,
         mut reads_to_keep: HashSet<u32>,
-        write_to: &mut T,
+        mut write_to: &mut T,
     ) -> Result<(), Invalid> {
         let file_handle = self.open()?;
-        match self.filetype {
-            FileType::Fasta => {
-                let records = fasta::Reader::new(file_handle)
-                    .records()
-                    .map(|r| r.unwrap());
-                for (i, record) in records.enumerate() {
-                    let i = &(i as u32);
-                    if reads_to_keep.contains(&i) {
-                        let header = match record.desc() {
-                            Some(d) => format!("{} {}", record.id(), d),
-                            None => record.id().to_string(),
-                        };
-                        if let Err(e) = write!(
-                            write_to,
-                            ">{}\n{}\n",
-                            header,
-                            std::str::from_utf8(record.seq()).unwrap()
-                        ) {
-                            return Err(Invalid::WriteFailed {
-                                error: e.to_string(),
-                            });
-                        }
-                        reads_to_keep.remove(&i);
+        let mut i: u32 = 0;
+        let _result = match parse_sequence_reader(
+            file_handle,
+            |_| {},
+            |record| {
+                if reads_to_keep.contains(&i) {
+                    if self.filetype == FileType::Fasta {
+                        record.write_fasta(&mut write_to, b"\n");
+                    } else {
+                        record.write_fastq(&mut write_to, b"\n");
                     }
-                    if reads_to_keep.is_empty() {
-                        break;
-                    }
+                    reads_to_keep.remove(&i);
                 }
                 if reads_to_keep.is_empty() {
-                    Ok(())
-                } else {
-                    Err(Invalid::IndicesNotFound {})
+                    ()
                 }
+                i += 1;
+            },
+        ) {
+            Ok(_) => Some(()),
+            Err(err) => {
+                return Err(Invalid::WriteFailed {
+                    error: err.to_string(),
+                })
             }
-            FileType::Fastq => {
-                let records = fastq::Reader::new(file_handle)
-                    .records()
-                    .map(|r| r.unwrap());
-                for (i, record) in records.enumerate() {
-                    let i = &(i as u32);
-                    if reads_to_keep.contains(&i) {
-                        let header = match record.desc() {
-                            Some(d) => format!("{} {}", record.id(), d),
-                            None => record.id().to_string(),
-                        };
-                        // todo: once rust-bio record Display trait is fixed, clean up this write
-                        if let Err(e) = write!(
-                            write_to,
-                            "@{}\n{}\n+\n{}\n",
-                            header,
-                            std::str::from_utf8(record.seq()).unwrap(),
-                            std::str::from_utf8(record.qual()).unwrap(),
-                        ) {
-                            return Err(Invalid::WriteFailed {
-                                error: e.to_string(),
-                            });
-                        }
-                        reads_to_keep.remove(&i);
-                    }
-                    if reads_to_keep.is_empty() {
-                        break;
-                    }
-                }
-                if reads_to_keep.is_empty() {
-                    Ok(())
-                } else {
-                    Err(Invalid::IndicesNotFound {})
-                }
-            }
+        };
+        if reads_to_keep.is_empty() {
+            Ok(())
+        } else {
+            Err(Invalid::IndicesNotFound {})
         }
     }
 }
